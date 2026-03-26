@@ -138,7 +138,9 @@ jobs:
           $packageDir = Join-Path $env:GITHUB_WORKSPACE "release-package"
           New-Item -ItemType Directory -Force -Path $packageDir | Out-Null
           Copy-Item (Join-Path $out "Telegram.exe") $packageDir
-          Copy-Item (Join-Path $out "Updater.exe") $packageDir
+          if (Test-Path (Join-Path $out "Updater.exe")) {
+            Copy-Item (Join-Path $out "Updater.exe") $packageDir
+          }
           Compress-Archive -Path (Join-Path $packageDir "*") -DestinationPath (Join-Path $env:GITHUB_WORKSPACE "Telegram-windows-x64-debug.zip") -Force
 
       - name: Upload workflow artifact.
