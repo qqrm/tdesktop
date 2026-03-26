@@ -568,6 +568,9 @@ PlaybackSponsored::PlaybackSponsored(
 			return;
 		}
 		_data = std::move(data);
+		if (Data::SponsoredMessagesRenderSuppressed()) {
+			return;
+		}
 		if (_data->state.initial()
 			|| (_data->state.itemIndex > _data->list.size())
 			|| (_data->state.itemIndex == _data->list.size()

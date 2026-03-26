@@ -53,6 +53,10 @@ template <typename Fields>
 
 } // namespace
 
+bool SponsoredMessagesRenderSuppressed() {
+	return true;
+}
+
 SponsoredMessages::SponsoredMessages(not_null<Main::Session*> session)
 : _session(session)
 , _clearTimer([=] { clearOldRequests(); }) {
@@ -103,6 +107,9 @@ void SponsoredMessages::clearOldRequests() {
 
 SponsoredMessages::AppendResult SponsoredMessages::append(
 		not_null<History*> history) {
+	if (SponsoredMessagesRenderSuppressed()) {
+		return SponsoredMessages::AppendResult::None;
+	}
 	if (isTopBarFor(history)) {
 		return SponsoredMessages::AppendResult::None;
 	}
@@ -139,6 +146,9 @@ void SponsoredMessages::inject(
 		MsgId injectAfterMsgId,
 		int betweenHeight,
 		int fallbackWidth) {
+	if (SponsoredMessagesRenderSuppressed()) {
+		return;
+	}
 	if (!canHaveFor(history)) {
 		return;
 	}
@@ -453,6 +463,9 @@ SponsoredForVideo SponsoredMessages::prepareForVideo(
 FullMsgId SponsoredMessages::fillTopBar(
 		not_null<History*> history,
 		not_null<Ui::RpWidget*> widget) {
+	if (SponsoredMessagesRenderSuppressed()) {
+		return {};
+	}
 	const auto it = _data.find(history);
 	if (it != end(_data)) {
 		auto &list = it->second;
@@ -825,6 +838,9 @@ SponsoredReportAction SponsoredMessages::createReportCallback(
 
 SponsoredMessages::State SponsoredMessages::state(
 		not_null<History*> history) const {
+	if (SponsoredMessagesRenderSuppressed()) {
+		return State::None;
+	}
 	const auto it = _data.find(history);
 	return (it == end(_data)) ? State::None : it->second.state;
 }

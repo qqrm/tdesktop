@@ -1679,7 +1679,9 @@ void OverlayWidget::refreshSponsoredButtonWidth() {
 
 void OverlayWidget::fillContextMenuActions(
 		const Ui::Menu::MenuCallback &addAction) {
-	if (_message && _message->isSponsored()) {
+	if (_message
+		&& _message->isSponsored()
+		&& !Data::SponsoredMessagesRenderSuppressed()) {
 		if (const auto window = findWindow()) {
 			const auto show = window->uiShow();
 			const auto fullId = _message->fullId();
@@ -4046,6 +4048,10 @@ void OverlayWidget::displayVideoStream(
 }
 
 void OverlayWidget::initSponsoredButton() {
+	if (Data::SponsoredMessagesRenderSuppressed()) {
+		_sponsoredButton = nullptr;
+		return;
+	}
 	const auto has = _message && _message->isSponsored() && _session;
 	if (has && _sponsoredButton) {
 		return;

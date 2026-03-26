@@ -28,6 +28,8 @@ class RpWidget;
 
 namespace Data {
 
+[[nodiscard]] bool SponsoredMessagesRenderSuppressed();
+
 class MediaPreload;
 
 struct SponsoredReportResult final {
