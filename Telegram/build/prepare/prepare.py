@@ -82,7 +82,6 @@ if not os.path.isdir(os.path.join(thirdPartyDir, keysLoc)):
     pathlib.Path(os.path.join(thirdPartyDir, keysLoc)).mkdir(parents=True, exist_ok=True)
 
 pathPrefixes = [
-    'ThirdParty\\msys64\\mingw64\\bin',
     'ThirdParty\\jom',
     'ThirdParty\\gyp',
 ] if win else [
@@ -109,11 +108,13 @@ elif (win64):
     environment.update({
         'SPECIAL_TARGET': 'win64',
         'X8664': 'x64',
+        'CMAKE_GENERATOR': 'Visual Studio 17 2022',
     })
 elif (winarm):
     environment.update({
         'SPECIAL_TARGET': 'winarm',
         'X8664': 'ARM64',
+        'CMAKE_GENERATOR': 'Visual Studio 17 2022',
     })
 elif (mac):
     environment.update({
@@ -146,7 +147,10 @@ modifiedEnv = os.environ.copy()
 for key in environment:
     modifiedEnv[key] = environment[key]
 
-modifiedEnv['PATH'] = environment['PATH_PREFIX'] + modifiedEnv['PATH']
+if win:
+    modifiedEnv['PATH'] = modifiedEnv['PATH'] + pathSep + environment['PATH_PREFIX']
+else:
+    modifiedEnv['PATH'] = environment['PATH_PREFIX'] + modifiedEnv['PATH']
 
 def computeFileHash(path):
     sha1 = hashlib.sha1()
@@ -287,14 +291,28 @@ def winFailOnEach(command):
     result = ''
     startingCommand = True
     for command in commands:
+        command = command.rstrip()
+        if command == '':
+            continue
+        continuation = command.endswith('^')
+        if continuation:
+            command = command[:-1].rstrip()
+        if 'skip-release' in options:
+            command = command.replace(
+                'MultiThreaded$<$<CONFIG:Debug>:Debug>',
+                'MultiThreadedDebug')
+            command = command.replace(
+                'MultiThreaded$^<$^<CONFIG:Debug^>:Debug^>',
+                'MultiThreadedDebug')
         command = re.sub(r'\$([A-Za-z0-9_]+)', r'%\1%', command)
-        if re.search(r'\$[^<]', command):
+        if re.search(r'\$(?!\^?<)', command):
             error('Bad command: ' + command)
         appendCall = startingCommand and not re.match(r'(if|for) ', command)
         called = 'call ' + command if appendCall else command
         result = result + called
-        if command.endswith('^'):
+        if continuation:
             startingCommand = False
+            result = result + ' '
         else:
             startingCommand = True
             result = result + '\r\nif %errorlevel% neq 0 exit /b %errorlevel%\r\n'
@@ -457,16 +475,19 @@ stage('patches', """
 
 stage('msys64', """
 win:
-    SET PATH=%THIRDPARTY_DIR%\\msys64\\usr\\bin;%PATH%
+    SET PATH=%THIRDPARTY_DIR%\\msys64\\mingw64\\bin;%THIRDPARTY_DIR%\\msys64\\usr\\bin;%PATH%
     SET CHERE_INVOKING=enabled_from_arguments
     SET MSYS2_PATH_TYPE=inherit
 
-    powershell -Command "iwr -OutFile ./msys64.exe https://github.com/msys2/msys2-installer/releases/download/2025-08-30/msys2-base-x86_64-20250830.sfx.exe"
+    powershell -NoProfile -Command "iwr -OutFile ./msys64.exe https://github.com/msys2/msys2-installer/releases/download/2025-08-30/msys2-base-x86_64-20250830.sfx.exe"
     msys64.exe
+    python -c "from pathlib import Path; p = Path(r'msys64/etc/pacman.d/mirrorlist.msys'); s = p.read_text(); y = 'Server = https://mirror.yandex.ru/mirrors/msys2/msys/' + chr(36) + 'arch/\\n'; s = s.replace(y, ''); s = s.replace('## Primary\\n', '## Primary\\n' + y, 1); p.write_text(s)"
+    python -c "from pathlib import Path; p = Path(r'msys64/etc/pacman.d/mirrorlist.mingw'); s = p.read_text(); y = 'Server = https://mirror.yandex.ru/mirrors/msys2/mingw/' + chr(36) + 'repo/\\n'; s = s.replace(y, ''); s = s.replace('## Primary\\n', '## Primary\\n' + y, 1); p.write_text(s)"
     del msys64.exe
 
     bash -c "pacman-key --init; pacman-key --populate; pacman -Syu --noconfirm"
     pacman -Syu --noconfirm ^
+        diffutils ^
         make ^
         mingw-w64-x86_64-diffutils ^
         mingw-w64-x86_64-gperf ^
@@ -536,7 +557,7 @@ stage('zlib', """
     cd zlib
 win:
     cmake . ^
-        -DCMAKE_MSVC_RUNTIME_LIBRARY="MultiThreaded$<$<CONFIG:Debug>:Debug>" ^
+        -DCMAKE_MSVC_RUNTIME_LIBRARY="MultiThreaded$^<$^<CONFIG:Debug^>:Debug^>" ^
         -DCMAKE_POLICY_DEFAULT_CMP0091=NEW ^
         -DCMAKE_C_FLAGS="/DZLIB_WINAPI" ^
         -DZLIB_BUILD_EXAMPLES=OFF
@@ -592,30 +613,32 @@ mac:
 stage('openssl3', """
     git clone -b openssl-3.2.1 https://github.com/openssl/openssl openssl3
     cd openssl3
-win32:
-    perl Configure no-shared no-tests debug-VC-WIN32 /FS
-win64:
-    perl Configure no-shared no-tests debug-VC-WIN64A /FS
-winarm:
-    perl Configure no-shared no-tests debug-VC-WIN64-ARM /FS
 win:
-    jom -j%NUMBER_OF_PROCESSORS% build_libs
+    SET PATH=%VCToolsInstallDir%bin\\HostX64\\x64;%THIRDPARTY_DIR%\\msys64\\mingw64\\bin;%PATH%
+win32:
+    %THIRDPARTY_DIR%\\msys64\\mingw64\\bin\\perl.exe Configure no-shared no-tests debug-VC-WIN32 /FS
+win64:
+    %THIRDPARTY_DIR%\\msys64\\mingw64\\bin\\perl.exe Configure no-shared no-tests debug-VC-WIN64A /FS
+winarm:
+    %THIRDPARTY_DIR%\\msys64\\mingw64\\bin\\perl.exe Configure no-shared no-tests debug-VC-WIN64-ARM /FS
+win:
+    %THIRDPARTY_DIR%\\jom\\jom.exe -j%NUMBER_OF_PROCESSORS% build_libs
     mkdir out.dbg
     move libcrypto.lib out.dbg
     move libssl.lib out.dbg
     move ossl_static.pdb out.dbg
 release:
     move out.dbg\\ossl_static.pdb out.dbg\\ossl_static
-    jom clean
+    %THIRDPARTY_DIR%\\jom\\jom.exe clean
     move out.dbg\\ossl_static out.dbg\\ossl_static.pdb
 win32_release:
-    perl Configure no-shared no-tests VC-WIN32 /FS
+    %THIRDPARTY_DIR%\\msys64\\mingw64\\bin\\perl.exe Configure no-shared no-tests VC-WIN32 /FS
 win64_release:
-    perl Configure no-shared no-tests VC-WIN64A /FS
+    %THIRDPARTY_DIR%\\msys64\\mingw64\\bin\\perl.exe Configure no-shared no-tests VC-WIN64A /FS
 winarm_release:
-    perl Configure no-shared no-tests VC-WIN64-ARM /FS
+    %THIRDPARTY_DIR%\\msys64\\mingw64\\bin\\perl.exe Configure no-shared no-tests VC-WIN64-ARM /FS
 win_release:
-    jom -j%NUMBER_OF_PROCESSORS% build_libs
+    %THIRDPARTY_DIR%\\jom\\jom.exe -j%NUMBER_OF_PROCESSORS% build_libs
     mkdir out
     move libcrypto.lib out
     move libssl.lib out
@@ -661,7 +684,7 @@ stage('rnnoise', """
     mkdir out
     cd out
 win:
-    cmake .. -DCMAKE_MSVC_RUNTIME_LIBRARY="MultiThreaded$<$<CONFIG:Debug>:Debug>"
+    cmake .. -DCMAKE_MSVC_RUNTIME_LIBRARY="MultiThreaded$^<$^<CONFIG:Debug^>:Debug^>"
     cmake --build . --config Debug
 release:
     cmake --build . --config Release
@@ -743,6 +766,7 @@ win:
     echo endian = 'little' >> %FILE%
 
 depends:python/Scripts/activate.bat
+    SET PATH=%VCToolsInstallDir%bin\\HostX64\\x64;%THIRDPARTY_DIR%\\msys64\\mingw64\\bin;%PATH%
     %THIRDPARTY_DIR%\\python\\Scripts\\activate.bat
     meson setup --cross-file %FILE% --prefix %LIBS_DIR%/local --default-library=static --buildtype=debug -Denable_tools=false -Denable_tests=false %DAV1D_ASM_DISABLE% -Db_vscrt=mtd builddir-debug
     meson compile -C builddir-debug
@@ -803,6 +827,7 @@ win:
     echo endian = 'little' >> %FILE%
 
 depends:python/Scripts/activate.bat
+    SET PATH=%VCToolsInstallDir%bin\\HostX64\\x64;%THIRDPARTY_DIR%\\msys64\\mingw64\\bin;%PATH%
     %THIRDPARTY_DIR%\\python\\Scripts\\activate.bat
     meson setup --cross-file %FILE% --prefix %LIBS_DIR%/local --default-library=static --buildtype=debug -Db_vscrt=mtd builddir-debug
     meson compile -C builddir-debug
@@ -843,7 +868,7 @@ stage('libavif', """
 win:
     cmake . ^
         -DCMAKE_INSTALL_PREFIX=%LIBS_DIR%/local ^
-        -DCMAKE_MSVC_RUNTIME_LIBRARY="MultiThreaded$<$<CONFIG:Debug>:Debug>" ^
+        -DCMAKE_MSVC_RUNTIME_LIBRARY="MultiThreaded$^<$^<CONFIG:Debug^>:Debug^>" ^
         -DCMAKE_POLICY_DEFAULT_CMP0091=NEW ^
         -DBUILD_SHARED_LIBS=OFF ^
         -DAVIF_ENABLE_WERROR=OFF ^
@@ -872,7 +897,7 @@ stage('libde265', """
 win:
     cmake . ^
         -DCMAKE_INSTALL_PREFIX=%LIBS_DIR%/local ^
-        -DCMAKE_MSVC_RUNTIME_LIBRARY="MultiThreaded$<$<CONFIG:Debug>:Debug>" ^
+        -DCMAKE_MSVC_RUNTIME_LIBRARY="MultiThreaded$^<$^<CONFIG:Debug^>:Debug^>" ^
         -DCMAKE_POLICY_DEFAULT_CMP0091=NEW ^
         -DCMAKE_C_FLAGS="/DLIBDE265_STATIC_BUILD" ^
         -DCMAKE_CXX_FLAGS="/DLIBDE265_STATIC_BUILD" ^
@@ -902,8 +927,9 @@ stage('libwebp', """
     git clone -b v1.6.0 https://github.com/webmproject/libwebp.git
     cd libwebp
 win:
-    nmake /f Makefile.vc CFG=debug-static OBJDIR=out RTLIBCFG=static all
-    nmake /f Makefile.vc CFG=release-static OBJDIR=out RTLIBCFG=static all
+    SET PATH=%VCToolsInstallDir%bin\\HostX64\\x64;%WindowsSdkVerBinPath%x64;%PATH%
+    "%VCToolsInstallDir%bin\\HostX64\\x64\\nmake.exe" /f Makefile.vc CFG=debug-static OBJDIR=out RTLIBCFG=static all
+    "%VCToolsInstallDir%bin\\HostX64\\x64\\nmake.exe" /f Makefile.vc CFG=release-static OBJDIR=out RTLIBCFG=static all
     copy out\\release-static\\$X8664\\lib\\libwebp.lib out\\release-static\\$X8664\\lib\\webp.lib
     copy out\\release-static\\$X8664\\lib\\libwebpdemux.lib out\\release-static\\$X8664\\lib\\webpdemux.lib
     copy out\\release-static\\$X8664\\lib\\libwebpmux.lib out\\release-static\\$X8664\\lib\\webpmux.lib
@@ -947,7 +973,7 @@ win:
     %THIRDPARTY_DIR%\\msys64\\usr\\bin\\sed.exe -i 's/HAVE_VISIBILITY/LIBHEIF_STATIC_BUILD/g' heifio/CMakeLists.txt
     cmake . ^
         -DCMAKE_INSTALL_PREFIX=%LIBS_DIR%/local ^
-        -DCMAKE_MSVC_RUNTIME_LIBRARY="MultiThreaded$<$<CONFIG:Debug>:Debug>" ^
+        -DCMAKE_MSVC_RUNTIME_LIBRARY="MultiThreaded$^<$^<CONFIG:Debug^>:Debug^>" ^
         -DBUILD_SHARED_LIBS=OFF ^
         -DCMAKE_DISABLE_FIND_PACKAGE_Doxygen=ON ^
         -DBUILD_TESTING=OFF ^
@@ -1023,7 +1049,7 @@ stage('libjxl', """
 win:
     cmake . ^
         -DCMAKE_INSTALL_PREFIX=%LIBS_DIR%/local ^
-        -DCMAKE_MSVC_RUNTIME_LIBRARY="MultiThreaded$<$<CONFIG:Debug>:Debug>" ^
+        -DCMAKE_MSVC_RUNTIME_LIBRARY="MultiThreaded$^<$^<CONFIG:Debug^>:Debug^>" ^
         -DCMAKE_C_FLAGS="/DJXL_STATIC_DEFINE /DJXL_THREADS_STATIC_DEFINE /DJXL_CMS_STATIC_DEFINE" ^
         -DCMAKE_CXX_FLAGS="/DJXL_STATIC_DEFINE /DJXL_THREADS_STATIC_DEFINE /DJXL_CMS_STATIC_DEFINE" ^
         %cmake_defines%
@@ -1049,7 +1075,7 @@ depends:patches/libvpx/*.patch
 win:
     for /r %%i in (..\\patches\\libvpx\\*) do git apply %%i
 
-    SET PATH=%THIRDPARTY_DIR%\\msys64\\usr\\bin;%PATH%
+    SET PATH=%THIRDPARTY_DIR%\\msys64\\mingw64\\bin;%THIRDPARTY_DIR%\\msys64\\usr\\bin;%PATH%
     SET CHERE_INVOKING=enabled_from_arguments
     SET MSYS2_PATH_TYPE=inherit
 
@@ -1108,6 +1134,7 @@ stage('liblcms2', """
     cd liblcms2
 win:
 depends:python/Scripts/activate.bat
+    SET PATH=%VCToolsInstallDir%bin\\HostX64\\x64;%PATH%
     %THIRDPARTY_DIR%\\python\\Scripts\\activate.bat
     meson setup --default-library=static --buildtype=debug -Db_vscrt=mtd out/Debug
     meson compile -C out/Debug
@@ -1155,7 +1182,7 @@ win:
 depends:patches/ffmpeg.patch
     git apply ../patches/ffmpeg.patch
 
-    SET PATH=%THIRDPARTY_DIR%\\msys64\\usr\\bin;%PATH%
+    SET PATH=%VCToolsInstallDir%bin\\HostX64\\x64;%WindowsSdkVerBinPath%x64;%THIRDPARTY_DIR%\\msys64\\mingw64\\bin;%THIRDPARTY_DIR%\\msys64\\usr\\bin;%PATH%
     SET CHERE_INVOKING=enabled_from_arguments
     SET MSYS2_PATH_TYPE=inherit
 
@@ -1390,6 +1417,7 @@ winarm:
     SET "FolderPostfix=_ARM64"
 win:
 depends:python/Scripts/activate.bat
+    SET PATH=%VCToolsInstallDir%bin\\HostX64\\x64;%PATH%
     %THIRDPARTY_DIR%\\python\\Scripts\\activate.bat
     cd src\\client\\windows
     gyp --no-circular-check breakpad_client.gyp --format=ninja
@@ -1552,8 +1580,8 @@ win:
         -nomake tests ^
         -platform win32-msvc
 
-    jom -j%NUMBER_OF_PROCESSORS%
-    jom -j%NUMBER_OF_PROCESSORS% install
+    %THIRDPARTY_DIR%\\jom\\jom.exe -j%NUMBER_OF_PROCESSORS%
+    %THIRDPARTY_DIR%\\jom\\jom.exe -j%NUMBER_OF_PROCESSORS% install
 mac:
     find ../../patches/qtbase_$QT -type f -print0 | sort -z | xargs -0 git apply
     cd ..
@@ -1625,13 +1653,14 @@ win:
 release:
     SET CONFIGURATIONS=-debug-and-release
 win:
-    """ + removeDir('"%LIBS_DIR%\\Qt' + qt + '"') + """
+    """ + removeDir('"%LIBS_DIR%\\Qt-' + qt + '"') + """
     SET MOZJPEG_DIR=%LIBS_DIR%\\mozjpeg
     SET OPENSSL_DIR=%LIBS_DIR%\\openssl3
     SET OPENSSL_LIBS_DIR=%OPENSSL_DIR%\\out
     SET ZLIB_LIBS_DIR=%LIBS_DIR%\\zlib
     SET WEBP_DIR=%LIBS_DIR%\\libwebp
     SET LCMS2_DIR=%LIBS_DIR%\\liblcms2
+    SET PATH=%VCToolsInstallDir%bin\\HostX64\\x64;%WindowsSdkVerBinPath%x64;%PATH%
     configure -prefix "%LIBS_DIR%\\Qt-%QT%" ^
         %CONFIGURATIONS% ^
         -force-debug-info ^
@@ -1669,7 +1698,7 @@ win:
         -D WebP_mux_LIBRARY="%WEBP_DIR%\\out\\release-static\\$X8664\\lib\\webpmux.lib" ^
         -D LCMS2_FOUND=1 ^
         -D LCMS2_INCLUDE_DIR="%LCMS2_DIR%\\include" ^
-        -D LCMS2_LIBRARIES="%LCMS2_DIR%\\out\\Release\\src\\liblcms2.a"
+        -D LCMS2_LIBRARIES="%LCMS2_DIR%\\out\\Debug\\src\\liblcms2.a"
 
     cmake --build . --config Debug
     cmake --install . --config Debug
@@ -1690,7 +1719,7 @@ win:
     SET OPENH264_PATH=$USED_PREFIX/include
     SET FFMPEG_PATH=$LIBS_DIR/ffmpeg
     cmake -B out \
-        -DCMAKE_MSVC_RUNTIME_LIBRARY="MultiThreaded$<$<CONFIG:Debug>:Debug>" \
+        -DCMAKE_MSVC_RUNTIME_LIBRARY="MultiThreaded$^<$^<CONFIG:Debug^>:Debug^>" \
         -DTG_OWT_BUILD_AUDIO_BACKENDS=OFF \
         -DTG_OWT_SPECIAL_TARGET=$SPECIAL_TARGET \
         -DTG_OWT_LIBJPEG_INCLUDE_PATH=$MOZJPEG_PATH \
@@ -1783,7 +1812,7 @@ win:
         -D ADA_TESTING=OFF ^
         -D ADA_TOOLS=OFF ^
         -D ADA_INCLUDE_URL_PATTERN=OFF ^
-        -D CMAKE_MSVC_RUNTIME_LIBRARY="MultiThreaded$<$<CONFIG:Debug>:Debug>"
+        -D CMAKE_MSVC_RUNTIME_LIBRARY="MultiThreaded$^<$^<CONFIG:Debug^>:Debug^>"
     cmake --build out --config Debug
     cmake --build out --config Release
 mac:
@@ -1839,6 +1868,7 @@ win:
     SET OPENSSL_DIR=%LIBS_DIR%\\openssl3
     SET OPENSSL_LIBS_DIR=%OPENSSL_DIR%\\out
     SET ZLIB_LIBS_DIR=%LIBS_DIR%\\zlib
+    SET PATH=%THIRDPARTY_DIR%\\msys64\\mingw64\\bin;%PATH%
     %THIRDPARTY_DIR%\\msys64\\usr\\bin\\sed -i "s/STREQUAL/MATCHES/" td/generate/CMakeLists.txt
     mkdir out
     cd out
@@ -1852,7 +1882,7 @@ win:
         -DZLIB_INCLUDE_DIR=%ZLIB_LIBS_DIR% ^
         -DZLIB_LIBRARIES="%ZLIB_LIBS_DIR%\\Debug\\zlibstaticd.lib" ^
         -DCMAKE_CONFIGURATION_TYPES=Debug ^
-        -DCMAKE_MSVC_RUNTIME_LIBRARY="MultiThreaded$<$<CONFIG:Debug>:Debug>" ^
+        -DCMAKE_MSVC_RUNTIME_LIBRARY="MultiThreaded$^<$^<CONFIG:Debug^>:Debug^>" ^
         -DCMAKE_POLICY_DEFAULT_CMP0091=NEW ^
         -DCMAKE_C_FLAGS="/DZLIB_WINAPI" ^
         -DCMAKE_CXX_FLAGS="/DZLIB_WINAPI" ^
@@ -1874,7 +1904,7 @@ release:
         -DZLIB_INCLUDE_DIR=%ZLIB_LIBS_DIR% ^
         -DZLIB_LIBRARIES="%ZLIB_LIBS_DIR%\\Release\\zlibstatic.lib" ^
         -DCMAKE_CONFIGURATION_TYPES=Release ^
-        -DCMAKE_MSVC_RUNTIME_LIBRARY="MultiThreaded$<$<CONFIG:Debug>:Debug>" ^
+        -DCMAKE_MSVC_RUNTIME_LIBRARY="MultiThreaded$^<$^<CONFIG:Debug^>:Debug^>" ^
         -DCMAKE_POLICY_DEFAULT_CMP0091=NEW ^
         -DCMAKE_C_FLAGS="/DZLIB_WINAPI" ^
         -DCMAKE_CXX_FLAGS="/DZLIB_WINAPI" ^
