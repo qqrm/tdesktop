@@ -139,13 +139,13 @@ jobs:
           New-Item -ItemType Directory -Force -Path $packageDir | Out-Null
           Copy-Item (Join-Path $out "Telegram.exe") $packageDir
           Copy-Item (Join-Path $out "Updater.exe") $packageDir
-          Compress-Archive -Path (Join-Path $packageDir "*") -DestinationPath (Join-Path $env:GITHUB_WORKSPACE "Telegram-windows-x64.zip") -Force
+          Compress-Archive -Path (Join-Path $packageDir "*") -DestinationPath (Join-Path $env:GITHUB_WORKSPACE "Telegram-windows-x64-debug.zip") -Force
 
       - name: Upload workflow artifact.
         uses: actions/upload-artifact@v7
         with:
-          name: Telegram-windows-x64
-          path: ${{ github.workspace }}\Telegram-windows-x64.zip
+          name: Telegram-windows-x64-debug
+          path: ${{ github.workspace }}\Telegram-windows-x64-debug.zip
 
       - name: Publish GitHub release asset.
         shell: bash
@@ -157,16 +157,16 @@ jobs:
         run: |
           set -euo pipefail
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$RELEASE_TAG" "$GITHUB_WORKSPACE/Telegram-windows-x64.zip" --repo "$GITHUB_REPOSITORY" --clobber
+            gh release upload "$RELEASE_TAG" "$GITHUB_WORKSPACE/Telegram-windows-x64-debug.zip" --repo "$GITHUB_REPOSITORY" --clobber
           else
             extra_args=()
             if [ "$RELEASE_PRERELEASE" = "true" ]; then
               extra_args+=(--prerelease)
             fi
-            gh release create "$RELEASE_TAG" "$GITHUB_WORKSPACE/Telegram-windows-x64.zip" \
+            gh release create "$RELEASE_TAG" "$GITHUB_WORKSPACE/Telegram-windows-x64-debug.zip" \
               --repo "$GITHUB_REPOSITORY" \
               --target "$RELEASE_TARGET" \
               --title "$RELEASE_TAG" \
-              --notes "Automated Windows x64 build from GitHub Actions." \
+              --notes "Automated Windows x64 Debug build from GitHub Actions." \
               "${extra_args[@]}"
           fi
