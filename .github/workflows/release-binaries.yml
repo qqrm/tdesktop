@@ -1,6 +1,9 @@
 name: Windows Release Artifact Build
 
 on:
+  push:
+    tags:
+      - 'v*'
   workflow_dispatch:
     inputs:
       ref:
@@ -10,7 +13,7 @@ on:
         type: string
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   windows-x64:
@@ -136,3 +139,21 @@ jobs:
         with:
           name: Telegram-windows-x64-release
           path: ${{ github.workspace }}\Telegram-windows-x64-release.zip
+
+      - name: Publish GitHub release asset.
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "$GITHUB_WORKSPACE/Telegram-windows-x64-release.zip" --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$RELEASE_TAG" "$GITHUB_WORKSPACE/Telegram-windows-x64-release.zip" \
+              --repo "$GITHUB_REPOSITORY" \
+              --verify-tag \
+              --title "$RELEASE_TAG" \
+              --notes "Portable Windows x64 Release build."
+          fi
