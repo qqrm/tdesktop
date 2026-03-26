@@ -1,28 +1,16 @@
-name: Release Binaries
+name: Windows Release Artifact Build
 
 on:
-  push:
-    tags:
-      - 'v*'
   workflow_dispatch:
     inputs:
-      tag:
-        description: Release tag to create or update.
-        required: true
-        type: string
       ref:
         description: Git ref to build from.
         required: false
         default: dev
         type: string
-      prerelease:
-        description: Mark the GitHub release as a prerelease.
-        required: false
-        default: true
-        type: boolean
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   windows-x64:
@@ -31,7 +19,7 @@ jobs:
 
     env:
       PREPARE_PATH: Telegram/build/prepare/prepare.py
-      TDESKTOP_BUILD_API: -D TDESKTOP_API_TEST=ON
+      TDESKTOP_BUILD_API: -D TDESKTOP_API_ID=611335 -D TDESKTOP_API_HASH=d524b414d21f4d37f08684c1df41ac9c
 
     defaults:
       run:
@@ -113,7 +101,7 @@ jobs:
           GYP_MSVS_OVERRIDE_PATH: C:\Program Files\Microsoft Visual Studio\2022\Enterprise\
           GYP_MSVS_VERSION: 2022
         run: |
-          %TBUILD%\%REPO_NAME%\Telegram\build\prepare\win.bat skip-release silent qt6
+          %TBUILD%\%REPO_NAME%\Telegram\build\prepare\win.bat silent qt6
 
       - name: Build Telegram Desktop.
         run: |
@@ -123,52 +111,28 @@ jobs:
           x64 ^
           qt6 ^
           %TDESKTOP_BUILD_API% ^
-          -D CMAKE_CONFIGURATION_TYPES=Debug ^
+          -D CMAKE_CONFIGURATION_TYPES=Release ^
           -D CMAKE_COMPILE_WARNING_AS_ERROR=ON ^
           -D CMAKE_MSVC_DEBUG_INFORMATION_FORMAT= ^
           -D DESKTOP_APP_DISABLE_AUTOUPDATE=OFF ^
           -D DESKTOP_APP_DISABLE_CRASH_REPORTS=OFF
 
-          cmake --build ..\out --config Debug --parallel
+          cmake --build ..\out --config Release --parallel
 
       - name: Package artifact.
         shell: powershell
         run: |
-          $out = Join-Path $env:TBUILD "$env:REPO_NAME\out\Debug"
+          $out = Join-Path $env:TBUILD "$env:REPO_NAME\out\Release"
           $packageDir = Join-Path $env:GITHUB_WORKSPACE "release-package"
           New-Item -ItemType Directory -Force -Path $packageDir | Out-Null
           Copy-Item (Join-Path $out "Telegram.exe") $packageDir
           if (Test-Path (Join-Path $out "Updater.exe")) {
             Copy-Item (Join-Path $out "Updater.exe") $packageDir
           }
-          Compress-Archive -Path (Join-Path $packageDir "*") -DestinationPath (Join-Path $env:GITHUB_WORKSPACE "Telegram-windows-x64-debug.zip") -Force
+          Compress-Archive -Path (Join-Path $packageDir "*") -DestinationPath (Join-Path $env:GITHUB_WORKSPACE "Telegram-windows-x64-release.zip") -Force
 
       - name: Upload workflow artifact.
         uses: actions/upload-artifact@v7
         with:
-          name: Telegram-windows-x64-debug
-          path: ${{ github.workspace }}\Telegram-windows-x64-debug.zip
-
-      - name: Publish GitHub release asset.
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
-          RELEASE_TARGET: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
-          RELEASE_PRERELEASE: ${{ github.event_name == 'workflow_dispatch' && inputs.prerelease || 'false' }}
-        run: |
-          set -euo pipefail
-          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$RELEASE_TAG" "$GITHUB_WORKSPACE/Telegram-windows-x64-debug.zip" --repo "$GITHUB_REPOSITORY" --clobber
-          else
-            extra_args=()
-            if [ "$RELEASE_PRERELEASE" = "true" ]; then
-              extra_args+=(--prerelease)
-            fi
-            gh release create "$RELEASE_TAG" "$GITHUB_WORKSPACE/Telegram-windows-x64-debug.zip" \
-              --repo "$GITHUB_REPOSITORY" \
-              --target "$RELEASE_TARGET" \
-              --title "$RELEASE_TAG" \
-              --notes "Automated Windows x64 Debug build from GitHub Actions." \
-              "${extra_args[@]}"
-          fi
+          name: Telegram-windows-x64-release
+          path: ${{ github.workspace }}\Telegram-windows-x64-release.zip

@@ -297,17 +297,24 @@ def winFailOnEach(command):
         continuation = command.endswith('^')
         if continuation:
             command = command[:-1].rstrip()
+        command = command.replace(
+            'MultiThreaded$^<$^<CONFIG:Debug^>:Debug^>',
+            'MultiThreaded$<$<CONFIG:Debug>:Debug>')
         if 'skip-release' in options:
             command = command.replace(
                 'MultiThreaded$<$<CONFIG:Debug>:Debug>',
                 'MultiThreadedDebug')
-            command = command.replace(
-                'MultiThreaded$^<$^<CONFIG:Debug^>:Debug^>',
-                'MultiThreadedDebug')
         command = re.sub(r'\$([A-Za-z0-9_]+)', r'%\1%', command)
         if re.search(r'\$(?!\^?<)', command):
             error('Bad command: ' + command)
-        appendCall = startingCommand and not re.match(r'(if|for) ', command)
+        token = ''
+        match = re.match(r'"([^"]+)"|(\S+)', command)
+        if match:
+            token = (match.group(1) or match.group(2)).lower()
+        appendCall = (
+            startingCommand
+            and not re.match(r'(if|for) ', command)
+            and (token.endswith('.bat') or token.endswith('.cmd')))
         called = 'call ' + command if appendCall else command
         result = result + called
         if continuation:
