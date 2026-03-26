@@ -1,0 +1,172 @@
+name: Release Binaries
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to create or update.
+        required: true
+        type: string
+      ref:
+        description: Git ref to build from.
+        required: false
+        default: dev
+        type: string
+      prerelease:
+        description: Mark the GitHub release as a prerelease.
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  windows-x64:
+    name: Windows x64
+    runs-on: windows-latest
+
+    env:
+      PREPARE_PATH: Telegram/build/prepare/prepare.py
+      TDESKTOP_BUILD_API: -D TDESKTOP_API_TEST=ON
+
+    defaults:
+      run:
+        shell: cmd
+
+    steps:
+      - name: Prepare directories.
+        run: |
+          mkdir %userprofile%\TBuild\Libraries
+          mklink /d %GITHUB_WORKSPACE%\TBuild %userprofile%\TBuild
+          echo TBUILD=%GITHUB_WORKSPACE%\TBuild>>%GITHUB_ENV%
+          echo LibrariesPath=%GITHUB_WORKSPACE%\TBuild\Libraries\win64>>%GITHUB_ENV%
+
+      - name: Get repository name.
+        shell: bash
+        run: echo "REPO_NAME=${GITHUB_REPOSITORY##*/}" >> $GITHUB_ENV
+
+      - name: Clone.
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+          path: ${{ env.TBUILD }}\${{ env.REPO_NAME }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref }}
+
+      - name: First set up.
+        shell: bash
+        run: |
+          DOCPATH=$TBUILD/$REPO_NAME/docs/building-win.md
+          SDK="$(grep "SDK version" $DOCPATH | sed -r 's/.*\*\*(.*)\*\* SDK version.*/\1/')"
+          echo "SDK=$SDK" >> $GITHUB_ENV
+
+          sed -i '/CMAKE_${lang}_FLAGS_DEBUG_INIT/s/${_Zi}//' "$PROGRAMFILES"/CMake/share/cmake*/Modules/Platform/Windows-MSVC.cmake
+
+          echo "$(sha256sum $TBUILD/$REPO_NAME/$PREPARE_PATH | awk '{ print $1 }')" >> CACHE_KEY.txt
+          echo "$SDK" >> CACHE_KEY.txt
+          echo "CACHE_KEY=$(sha256sum CACHE_KEY.txt | awk '{ print $1 }')" >> $GITHUB_ENV
+
+      - name: Native Tools Command Prompt.
+        uses: ilammy/msvc-dev-cmd@v1.13.0
+        with:
+          arch: x64
+          sdk: ${{ env.SDK }}
+
+      - name: NuGet sources.
+        run: |
+          nuget sources Disable -Name "Microsoft Visual Studio Offline Packages"
+          nuget sources Add -Source https://api.nuget.org/v3/index.json & exit 0
+
+      - name: ThirdParty cache.
+        uses: actions/cache@v5
+        with:
+          path: ${{ env.TBUILD }}\ThirdParty
+          key: ${{ runner.OS }}-release-third-party-${{ env.CACHE_KEY }}
+          restore-keys: ${{ runner.OS }}-release-third-party-
+
+      - name: Libraries cache.
+        uses: actions/cache@v5
+        with:
+          path: |
+            ${{ env.LibrariesPath }}\*
+            !${{ env.LibrariesPath }}\cache_keys
+            !${{ env.LibrariesPath }}\[qQ]t[_-]*
+            ${{ env.LibrariesPath }}\cache_keys\*
+            !${{ env.LibrariesPath }}\cache_keys\[qQ]t[_-]*
+          key: ${{ runner.OS }}-release-libs-${{ env.CACHE_KEY }}
+          restore-keys: ${{ runner.OS }}-release-libs-
+
+      - name: Qt cache.
+        uses: actions/cache@v5
+        with:
+          path: |
+            ${{ env.LibrariesPath }}\[qQ]t[_-]*
+            ${{ env.LibrariesPath }}\cache_keys\[qQ]t[_-]*
+          key: ${{ runner.OS }}-release-qt6-${{ env.CACHE_KEY }}
+          restore-keys: ${{ runner.OS }}-release-qt6-
+
+      - name: Libraries.
+        env:
+          GYP_MSVS_OVERRIDE_PATH: C:\Program Files\Microsoft Visual Studio\2022\Enterprise\
+          GYP_MSVS_VERSION: 2022
+        run: |
+          %TBUILD%\%REPO_NAME%\Telegram\build\prepare\win.bat skip-release silent qt6
+
+      - name: Build Telegram Desktop.
+        run: |
+          cd %TBUILD%\%REPO_NAME%\Telegram
+
+          call configure.bat ^
+          x64 ^
+          qt6 ^
+          %TDESKTOP_BUILD_API% ^
+          -D CMAKE_CONFIGURATION_TYPES=Debug ^
+          -D CMAKE_COMPILE_WARNING_AS_ERROR=ON ^
+          -D CMAKE_MSVC_DEBUG_INFORMATION_FORMAT= ^
+          -D DESKTOP_APP_DISABLE_AUTOUPDATE=OFF ^
+          -D DESKTOP_APP_DISABLE_CRASH_REPORTS=OFF
+
+          cmake --build ..\out --config Debug --parallel
+
+      - name: Package artifact.
+        shell: powershell
+        run: |
+          $out = Join-Path $env:TBUILD "$env:REPO_NAME\out\Debug"
+          $packageDir = Join-Path $env:GITHUB_WORKSPACE "release-package"
+          New-Item -ItemType Directory -Force -Path $packageDir | Out-Null
+          Copy-Item (Join-Path $out "Telegram.exe") $packageDir
+          Copy-Item (Join-Path $out "Updater.exe") $packageDir
+          Compress-Archive -Path (Join-Path $packageDir "*") -DestinationPath (Join-Path $env:GITHUB_WORKSPACE "Telegram-windows-x64.zip") -Force
+
+      - name: Upload workflow artifact.
+        uses: actions/upload-artifact@v7
+        with:
+          name: Telegram-windows-x64
+          path: ${{ github.workspace }}\Telegram-windows-x64.zip
+
+      - name: Publish GitHub release asset.
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          RELEASE_TARGET: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
+          RELEASE_PRERELEASE: ${{ github.event_name == 'workflow_dispatch' && inputs.prerelease || 'false' }}
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "$GITHUB_WORKSPACE/Telegram-windows-x64.zip" --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            extra_args=()
+            if [ "$RELEASE_PRERELEASE" = "true" ]; then
+              extra_args+=(--prerelease)
+            fi
+            gh release create "$RELEASE_TAG" "$GITHUB_WORKSPACE/Telegram-windows-x64.zip" \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$RELEASE_TARGET" \
+              --title "$RELEASE_TAG" \
+              --notes "Automated Windows x64 build from GitHub Actions." \
+              "${extra_args[@]}"
+          fi
