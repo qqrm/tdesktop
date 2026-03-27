@@ -109,6 +109,8 @@ jobs:
       - name: Build Telegram Desktop.
         run: |
           cd %TBUILD%\%REPO_NAME%\Telegram
+          set CMAKE_PREFIX_PATH=%LibrariesPath%\Qt-6.11.0;%LibrariesPath%\local
+          set Qt6_DIR=%LibrariesPath%\Qt-6.11.0\lib\cmake\Qt6
 
           call configure.bat ^
           x64 ^
